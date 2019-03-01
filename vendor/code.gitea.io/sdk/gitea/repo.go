@@ -11,23 +11,26 @@ import (
 	"time"
 )
 
-// Permission represents a API permission.
+// Permission represents a set of permissions
 type Permission struct {
 	Admin bool `json:"admin"`
 	Push  bool `json:"push"`
 	Pull  bool `json:"pull"`
 }
 
-// Repository represents a API repository.
+// Repository represents a repository
 type Repository struct {
 	ID            int64       `json:"id"`
 	Owner         *User       `json:"owner"`
 	Name          string      `json:"name"`
 	FullName      string      `json:"full_name"`
 	Description   string      `json:"description"`
+	Empty         bool        `json:"empty"`
 	Private       bool        `json:"private"`
 	Fork          bool        `json:"fork"`
+	Parent        *Repository `json:"parent"`
 	Mirror        bool        `json:"mirror"`
+	Size          int         `json:"size"`
 	HTMLURL       string      `json:"html_url"`
 	SSHURL        string      `json:"ssh_url"`
 	CloneURL      string      `json:"clone_url"`
@@ -37,9 +40,12 @@ type Repository struct {
 	Watchers      int         `json:"watchers_count"`
 	OpenIssues    int         `json:"open_issues_count"`
 	DefaultBranch string      `json:"default_branch"`
-	Created       time.Time   `json:"created_at"`
-	Updated       time.Time   `json:"updated_at"`
-	Permissions   *Permission `json:"permissions,omitempty"`
+	Archived      bool        `json:"archived"`
+	// swagger:strfmt date-time
+	Created time.Time `json:"created_at"`
+	// swagger:strfmt date-time
+	Updated     time.Time   `json:"updated_at"`
+	Permissions *Permission `json:"permissions,omitempty"`
 }
 
 // ListMyRepos lists all repositories for the authenticated user that has access to.
@@ -61,14 +67,25 @@ func (c *Client) ListOrgRepos(org string) ([]*Repository, error) {
 }
 
 // CreateRepoOption options when creating repository
+// swagger:model
 type CreateRepoOption struct {
-	Name        string `json:"name" binding:"Required;AlphaDashDot;MaxSize(100)"`
+	// Name of the repository to create
+	//
+	// required: true
+	// unique: true
+	Name string `json:"name" binding:"Required;AlphaDashDot;MaxSize(100)"`
+	// Description of the repository to create
 	Description string `json:"description" binding:"MaxSize(255)"`
-	Private     bool   `json:"private"`
-	AutoInit    bool   `json:"auto_init"`
-	Gitignores  string `json:"gitignores"`
-	License     string `json:"license"`
-	Readme      string `json:"readme"`
+	// Whether the repository is private
+	Private bool `json:"private"`
+	// Whether the repository should be auto-intialized?
+	AutoInit bool `json:"auto_init"`
+	// Gitignores to use
+	Gitignores string `json:"gitignores"`
+	// License to use
+	License string `json:"license"`
+	// Readme of the repository to create
+	Readme string `json:"readme"`
 }
 
 // CreateRepo creates a repository for authenticated user.
@@ -103,16 +120,19 @@ func (c *Client) DeleteRepo(owner, repo string) error {
 	return err
 }
 
-// MigrateRepoOption options when migrate repository from an external place
+// MigrateRepoOption options for migrating a repository from an external service
 type MigrateRepoOption struct {
+	// required: true
 	CloneAddr    string `json:"clone_addr" binding:"Required"`
 	AuthUsername string `json:"auth_username"`
 	AuthPassword string `json:"auth_password"`
-	UID          int    `json:"uid" binding:"Required"`
-	RepoName     string `json:"repo_name" binding:"Required"`
-	Mirror       bool   `json:"mirror"`
-	Private      bool   `json:"private"`
-	Description  string `json:"description"`
+	// required: true
+	UID int `json:"uid" binding:"Required"`
+	// required: true
+	RepoName    string `json:"repo_name" binding:"Required"`
+	Mirror      bool   `json:"mirror"`
+	Private     bool   `json:"private"`
+	Description string `json:"description"`
 }
 
 // MigrateRepo migrates a repository from other Git hosting sources for the
@@ -127,4 +147,10 @@ func (c *Client) MigrateRepo(opt MigrateRepoOption) (*Repository, error) {
 	}
 	repo := new(Repository)
 	return repo, c.getParsedResponse("POST", "/repos/migrate", jsonHeader, bytes.NewReader(body), repo)
+}
+
+// MirrorSync adds a mirrored repository to the mirror sync queue.
+func (c *Client) MirrorSync(owner, repo string) error {
+	_, err := c.getResponse("POST", fmt.Sprintf("/repos/%s/%s/mirror-sync", owner, repo), nil, nil)
+	return err
 }

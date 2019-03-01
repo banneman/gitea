@@ -5,8 +5,6 @@
 package user
 
 import (
-	"time"
-
 	api "code.gitea.io/sdk/gitea"
 
 	"code.gitea.io/gitea/models"
@@ -14,24 +12,10 @@ import (
 	"code.gitea.io/gitea/modules/setting"
 )
 
-// WatchInfo contains information about a watched repository
-type WatchInfo struct {
-	Subscribed    bool        `json:"subscribed"`
-	Ignored       bool        `json:"ignored"`
-	Reason        interface{} `json:"reason"`
-	CreatedAt     time.Time   `json:"created_at"`
-	URL           string      `json:"url"`
-	RepositoryURL string      `json:"repository_url"`
-}
-
 // getWatchedRepos returns the repos that the user with the specified userID is
 // watching
-func getWatchedRepos(userID int64, private bool) ([]*api.Repository, error) {
-	watchedRepos, err := models.GetWatchedRepos(userID, private)
-	if err != nil {
-		return nil, err
-	}
-	user, err := models.GetUserByID(userID)
+func getWatchedRepos(user *models.User, private bool) ([]*api.Repository, error) {
+	watchedRepos, err := models.GetWatchedRepos(user.ID, private)
 	if err != nil {
 		return nil, err
 	}
@@ -49,9 +33,23 @@ func getWatchedRepos(userID int64, private bool) ([]*api.Repository, error) {
 
 // GetWatchedRepos returns the repos that the user specified in ctx is watching
 func GetWatchedRepos(ctx *context.APIContext) {
+	// swagger:operation GET /users/{username}/subscriptions user userListSubscriptions
+	// ---
+	// summary: List the repositories watched by a user
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: username
+	//   type: string
+	//   in: path
+	//   description: username of the user
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/RepositoryList"
 	user := GetUserByParams(ctx)
 	private := user.ID == ctx.User.ID
-	repos, err := getWatchedRepos(user.ID, private)
+	repos, err := getWatchedRepos(user, private)
 	if err != nil {
 		ctx.Error(500, "getWatchedRepos", err)
 	}
@@ -60,7 +58,15 @@ func GetWatchedRepos(ctx *context.APIContext) {
 
 // GetMyWatchedRepos returns the repos that the authenticated user is watching
 func GetMyWatchedRepos(ctx *context.APIContext) {
-	repos, err := getWatchedRepos(ctx.User.ID, true)
+	// swagger:operation GET /user/subscriptions user userCurrentListSubscriptions
+	// ---
+	// summary: List repositories watched by the authenticated user
+	// produces:
+	// - application/json
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/RepositoryList"
+	repos, err := getWatchedRepos(ctx.User, true)
 	if err != nil {
 		ctx.Error(500, "getWatchedRepos", err)
 	}
@@ -70,12 +76,29 @@ func GetMyWatchedRepos(ctx *context.APIContext) {
 // IsWatching returns whether the authenticated user is watching the repo
 // specified in ctx
 func IsWatching(ctx *context.APIContext) {
+	// swagger:operation GET /repos/{owner}/{repo}/subscription repository userCurrentCheckSubscription
+	// ---
+	// summary: Check if the current user is watching a repo
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/WatchInfo"
 	if models.IsWatching(ctx.User.ID, ctx.Repo.Repository.ID) {
-		ctx.JSON(200, WatchInfo{
+		ctx.JSON(200, api.WatchInfo{
 			Subscribed:    true,
 			Ignored:       false,
 			Reason:        nil,
-			CreatedAt:     ctx.Repo.Repository.Created,
+			CreatedAt:     ctx.Repo.Repository.CreatedUnix.AsTime(),
 			URL:           subscriptionURL(ctx.Repo.Repository),
 			RepositoryURL: repositoryURL(ctx.Repo.Repository),
 		})
@@ -86,16 +109,33 @@ func IsWatching(ctx *context.APIContext) {
 
 // Watch the repo specified in ctx, as the authenticated user
 func Watch(ctx *context.APIContext) {
+	// swagger:operation PUT /repos/{owner}/{repo}/subscription repository userCurrentPutSubscription
+	// ---
+	// summary: Watch a repo
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/WatchInfo"
 	err := models.WatchRepo(ctx.User.ID, ctx.Repo.Repository.ID, true)
 	if err != nil {
 		ctx.Error(500, "WatchRepo", err)
 		return
 	}
-	ctx.JSON(200, WatchInfo{
+	ctx.JSON(200, api.WatchInfo{
 		Subscribed:    true,
 		Ignored:       false,
 		Reason:        nil,
-		CreatedAt:     ctx.Repo.Repository.Created,
+		CreatedAt:     ctx.Repo.Repository.CreatedUnix.AsTime(),
 		URL:           subscriptionURL(ctx.Repo.Repository),
 		RepositoryURL: repositoryURL(ctx.Repo.Repository),
 	})
@@ -104,6 +144,23 @@ func Watch(ctx *context.APIContext) {
 
 // Unwatch the repo specified in ctx, as the authenticated user
 func Unwatch(ctx *context.APIContext) {
+	// swagger:operation DELETE /repos/{owner}/{repo}/subscription repository userCurrentDeleteSubscription
+	// ---
+	// summary: Unwatch a repo
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// responses:
+	//   "204":
+	//     "$ref": "#/responses/empty"
 	err := models.WatchRepo(ctx.User.ID, ctx.Repo.Repository.ID, false)
 	if err != nil {
 		ctx.Error(500, "UnwatchRepo", err)

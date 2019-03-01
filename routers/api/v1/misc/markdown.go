@@ -8,13 +8,30 @@ import (
 	api "code.gitea.io/sdk/gitea"
 
 	"code.gitea.io/gitea/modules/context"
-	"code.gitea.io/gitea/modules/markdown"
+	"code.gitea.io/gitea/modules/markup/markdown"
 	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/modules/util"
 )
 
 // Markdown render markdown document to HTML
-// see https://github.com/gogits/go-gogs-client/wiki/Miscellaneous#render-an-arbitrary-markdown-document
 func Markdown(ctx *context.APIContext, form api.MarkdownOption) {
+	// swagger:operation POST /markdown miscellaneous renderMarkdown
+	// ---
+	// summary: Render a markdown document as HTML
+	// parameters:
+	// - name: body
+	//   in: body
+	//   schema:
+	//     "$ref": "#/definitions/MarkdownOption"
+	// consumes:
+	// - application/json
+	// produces:
+	//     - text/html
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/MarkdownRender"
+	//   "422":
+	//     "$ref": "#/responses/validationError"
 	if ctx.HasAPIError() {
 		ctx.Error(422, "", ctx.GetErrMsg())
 		return
@@ -28,7 +45,7 @@ func Markdown(ctx *context.APIContext, form api.MarkdownOption) {
 	switch form.Mode {
 	case "gfm":
 		md := []byte(form.Text)
-		context := markdown.URLJoin(setting.AppURL, form.Context)
+		context := util.URLJoin(setting.AppURL, form.Context)
 		if form.Wiki {
 			ctx.Write([]byte(markdown.RenderWiki(md, context, nil)))
 		} else {
@@ -40,8 +57,26 @@ func Markdown(ctx *context.APIContext, form api.MarkdownOption) {
 }
 
 // MarkdownRaw render raw markdown HTML
-// see https://github.com/gogits/go-gogs-client/wiki/Miscellaneous#render-a-markdown-document-in-raw-mode
 func MarkdownRaw(ctx *context.APIContext) {
+	// swagger:operation POST /markdown/raw miscellaneous renderMarkdownRaw
+	// ---
+	// summary: Render raw markdown as HTML
+	// parameters:
+	//     - name: body
+	//       in: body
+	//       description: Request body to render
+	//       required: true
+	//       schema:
+	//         type: string
+	// consumes:
+	//     - text/plain
+	// produces:
+	//     - text/html
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/MarkdownRender"
+	//   "422":
+	//     "$ref": "#/responses/validationError"
 	body, err := ctx.Req.Body().Bytes()
 	if err != nil {
 		ctx.Error(422, "", err)

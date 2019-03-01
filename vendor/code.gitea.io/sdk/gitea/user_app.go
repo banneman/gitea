@@ -18,10 +18,16 @@ func BasicAuthEncode(user, pass string) string {
 }
 
 // AccessToken represents a API access token.
+// swagger:response AccessToken
 type AccessToken struct {
+	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	Sha1 string `json:"sha1"`
 }
+
+// AccessTokenList represents a list of API access token.
+// swagger:response AccessTokenList
+type AccessTokenList []*AccessToken
 
 // ListAccessTokens lista all the access tokens of user
 func (c *Client) ListAccessTokens(user, pass string) ([]*AccessToken, error) {
@@ -31,6 +37,7 @@ func (c *Client) ListAccessTokens(user, pass string) ([]*AccessToken, error) {
 }
 
 // CreateAccessTokenOption options when create access token
+// swagger:parameters userCreateToken
 type CreateAccessTokenOption struct {
 	Name string `json:"name" binding:"Required"`
 }
@@ -47,4 +54,10 @@ func (c *Client) CreateAccessToken(user, pass string, opt CreateAccessTokenOptio
 			"content-type":  []string{"application/json"},
 			"Authorization": []string{"Basic " + BasicAuthEncode(user, pass)}},
 		bytes.NewReader(body), t)
+}
+
+// DeleteAccessToken delete token with key id
+func (c *Client) DeleteAccessToken(user string, keyID int64) error {
+	_, err := c.getResponse("DELETE", fmt.Sprintf("/user/%s/tokens/%d", user, keyID), nil, nil)
+	return err
 }

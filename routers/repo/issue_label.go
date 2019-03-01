@@ -9,6 +9,7 @@ import (
 	"code.gitea.io/gitea/modules/auth"
 	"code.gitea.io/gitea/modules/base"
 	"code.gitea.io/gitea/modules/context"
+	"code.gitea.io/gitea/modules/log"
 )
 
 const (
@@ -21,6 +22,7 @@ func Labels(ctx *context.Context) {
 	ctx.Data["PageIsIssueList"] = true
 	ctx.Data["PageIsLabels"] = true
 	ctx.Data["RequireMinicolors"] = true
+	ctx.Data["RequireTribute"] = true
 	ctx.Data["LabelTemplates"] = models.LabelTemplates
 	ctx.HTML(200, tplLabels)
 }
@@ -41,13 +43,14 @@ func InitializeLabels(ctx *context.Context, form auth.InitializeLabelsForm) {
 	labels := make([]*models.Label, len(list))
 	for i := 0; i < len(list); i++ {
 		labels[i] = &models.Label{
-			RepoID: ctx.Repo.Repository.ID,
-			Name:   list[i][0],
-			Color:  list[i][1],
+			RepoID:      ctx.Repo.Repository.ID,
+			Name:        list[i][0],
+			Description: list[i][2],
+			Color:       list[i][1],
 		}
 	}
 	if err := models.NewLabels(labels...); err != nil {
-		ctx.Handle(500, "NewLabels", err)
+		ctx.ServerError("NewLabels", err)
 		return
 	}
 	ctx.Redirect(ctx.Repo.RepoLink + "/labels")
@@ -57,7 +60,7 @@ func InitializeLabels(ctx *context.Context, form auth.InitializeLabelsForm) {
 func RetrieveLabels(ctx *context.Context) {
 	labels, err := models.GetLabelsByRepoID(ctx.Repo.Repository.ID, ctx.Query("sort"))
 	if err != nil {
-		ctx.Handle(500, "RetrieveLabels.GetLabels", err)
+		ctx.ServerError("RetrieveLabels.GetLabels", err)
 		return
 	}
 	for _, l := range labels {
@@ -80,12 +83,13 @@ func NewLabel(ctx *context.Context, form auth.CreateLabelForm) {
 	}
 
 	l := &models.Label{
-		RepoID: ctx.Repo.Repository.ID,
-		Name:   form.Title,
-		Color:  form.Color,
+		RepoID:      ctx.Repo.Repository.ID,
+		Name:        form.Title,
+		Description: form.Description,
+		Color:       form.Color,
 	}
-	if err := models.NewLabels(l); err != nil {
-		ctx.Handle(500, "NewLabel", err)
+	if err := models.NewLabel(l); err != nil {
+		ctx.ServerError("NewLabel", err)
 		return
 	}
 	ctx.Redirect(ctx.Repo.RepoLink + "/labels")
@@ -99,15 +103,16 @@ func UpdateLabel(ctx *context.Context, form auth.CreateLabelForm) {
 		case models.IsErrLabelNotExist(err):
 			ctx.Error(404)
 		default:
-			ctx.Handle(500, "UpdateLabel", err)
+			ctx.ServerError("UpdateLabel", err)
 		}
 		return
 	}
 
 	l.Name = form.Title
+	l.Description = form.Description
 	l.Color = form.Color
 	if err := models.UpdateLabel(l); err != nil {
-		ctx.Handle(500, "UpdateLabel", err)
+		ctx.ServerError("UpdateLabel", err)
 		return
 	}
 	ctx.Redirect(ctx.Repo.RepoLink + "/labels")
@@ -129,39 +134,60 @@ func DeleteLabel(ctx *context.Context) {
 
 // UpdateIssueLabel change issue's labels
 func UpdateIssueLabel(ctx *context.Context) {
-	issue := getActionIssue(ctx)
+	issues := getActionIssues(ctx)
 	if ctx.Written() {
 		return
 	}
 
-	if ctx.Query("action") == "clear" {
-		if err := issue.ClearLabels(ctx.User); err != nil {
-			ctx.Handle(500, "ClearLabels", err)
-			return
+	switch action := ctx.Query("action"); action {
+	case "clear":
+		for _, issue := range issues {
+			if err := issue.ClearLabels(ctx.User); err != nil {
+				ctx.ServerError("ClearLabels", err)
+				return
+			}
 		}
-	} else {
-		isAttach := ctx.Query("action") == "attach"
+	case "attach", "detach", "toggle":
 		label, err := models.GetLabelByID(ctx.QueryInt64("id"))
 		if err != nil {
 			if models.IsErrLabelNotExist(err) {
 				ctx.Error(404, "GetLabelByID")
 			} else {
-				ctx.Handle(500, "GetLabelByID", err)
+				ctx.ServerError("GetLabelByID", err)
 			}
 			return
 		}
 
-		if isAttach && !issue.HasLabel(label.ID) {
-			if err = issue.AddLabel(ctx.User, label); err != nil {
-				ctx.Handle(500, "AddLabel", err)
-				return
-			}
-		} else if !isAttach && issue.HasLabel(label.ID) {
-			if err = issue.RemoveLabel(ctx.User, label); err != nil {
-				ctx.Handle(500, "RemoveLabel", err)
-				return
+		if action == "toggle" {
+			// detach if any issues already have label, otherwise attach
+			action = "attach"
+			for _, issue := range issues {
+				if issue.HasLabel(label.ID) {
+					action = "detach"
+					break
+				}
 			}
 		}
+
+		if action == "attach" {
+			for _, issue := range issues {
+				if err = issue.AddLabel(ctx.User, label); err != nil {
+					ctx.ServerError("AddLabel", err)
+					return
+				}
+			}
+		} else {
+			for _, issue := range issues {
+				if err = issue.RemoveLabel(ctx.User, label); err != nil {
+					ctx.ServerError("RemoveLabel", err)
+					return
+				}
+			}
+		}
+	default:
+		log.Warn("Unrecognized action: %s", action)
+		ctx.Error(500)
+		return
 	}
 
 	ctx.JSON(200, map[string]interface{}{

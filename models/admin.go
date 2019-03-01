@@ -6,16 +6,11 @@ package models
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"time"
-
-	"github.com/Unknwon/com"
-	"github.com/go-xorm/xorm"
 
 	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/modules/util"
+
+	"github.com/Unknwon/com"
 )
 
 //NoticeType describes the notice type
@@ -30,22 +25,8 @@ const (
 type Notice struct {
 	ID          int64 `xorm:"pk autoincr"`
 	Type        NoticeType
-	Description string    `xorm:"TEXT"`
-	Created     time.Time `xorm:"-"`
-	CreatedUnix int64     `xorm:"INDEX"`
-}
-
-// BeforeInsert is invoked from XORM before inserting an object of this type.
-func (n *Notice) BeforeInsert() {
-	n.CreatedUnix = time.Now().Unix()
-}
-
-// AfterSet is invoked from XORM after setting the value of a field of this object.
-func (n *Notice) AfterSet(colName string, _ xorm.Cell) {
-	switch colName {
-	case "created_unix":
-		n.Created = time.Unix(n.CreatedUnix, 0).Local()
-	}
+	Description string         `xorm:"TEXT"`
+	CreatedUnix util.TimeStamp `xorm:"INDEX created"`
 }
 
 // TrStr returns a translation format string.
@@ -79,19 +60,7 @@ func RemoveAllWithNotice(title, path string) {
 }
 
 func removeAllWithNotice(e Engine, title, path string) {
-	var err error
-	// workaround for Go not being able to remove read-only files/folders: https://github.com/golang/go/issues/9606
-	// this bug should be fixed on Go 1.7, so the workaround should be removed when Gogs don't support Go 1.6 anymore:
-	// https://github.com/golang/go/commit/2ffb3e5d905b5622204d199128dec06cefd57790
-	if setting.IsWindows {
-		// converting "/" to "\" in path on Windows
-		path = strings.Replace(path, "/", "\\", -1)
-		err = exec.Command("cmd", "/C", "rmdir", "/S", "/Q", path).Run()
-	} else {
-		err = os.RemoveAll(path)
-	}
-
-	if err != nil {
+	if err := util.RemoveAll(path); err != nil {
 		desc := fmt.Sprintf("%s [%s]: %v", title, path, err)
 		log.Warn(desc)
 		if err = createNotice(e, NoticeRepository, desc); err != nil {
@@ -117,7 +86,7 @@ func Notices(page, pageSize int) ([]*Notice, error) {
 
 // DeleteNotice deletes a system notice by given ID.
 func DeleteNotice(id int64) error {
-	_, err := x.Id(id).Delete(new(Notice))
+	_, err := x.ID(id).Delete(new(Notice))
 	return err
 }
 

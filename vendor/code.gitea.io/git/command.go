@@ -6,6 +6,7 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os/exec"
@@ -16,6 +17,9 @@ import (
 var (
 	// GlobalCommandArgs global command args for external package setting
 	GlobalCommandArgs []string
+
+	// DefaultCommandExecutionTimeout default command execution timeout duration
+	DefaultCommandExecutionTimeout = 60 * time.Second
 )
 
 // Command represents a command with its subcommands or arguments.
@@ -33,9 +37,12 @@ func (c *Command) String() string {
 
 // NewCommand creates and returns a new Git Command based on given command and arguments.
 func NewCommand(args ...string) *Command {
+	// Make an explicit copy of GlobalCommandArgs, otherwise append might overwrite it
+	cargs := make([]string, len(GlobalCommandArgs))
+	copy(cargs, GlobalCommandArgs)
 	return &Command{
 		name: "git",
-		args: append(GlobalCommandArgs, args...),
+		args: append(cargs, args...),
 	}
 }
 
@@ -49,7 +56,7 @@ func (c *Command) AddArguments(args ...string) *Command {
 // it pipes stdout and stderr to given io.Writer.
 func (c *Command) RunInDirTimeoutPipeline(timeout time.Duration, dir string, stdout, stderr io.Writer) error {
 	if timeout == -1 {
-		timeout = 60 * time.Second
+		timeout = DefaultCommandExecutionTimeout
 	}
 
 	if len(dir) == 0 {
@@ -58,7 +65,10 @@ func (c *Command) RunInDirTimeoutPipeline(timeout time.Duration, dir string, std
 		log("%s: %v", dir, c)
 	}
 
-	cmd := exec.Command(c.name, c.args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.name, c.args...)
 	cmd.Dir = dir
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -66,26 +76,11 @@ func (c *Command) RunInDirTimeoutPipeline(timeout time.Duration, dir string, std
 		return err
 	}
 
-	done := make(chan error)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	var err error
-	select {
-	case <-time.After(timeout):
-		if cmd.Process != nil && cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
-			if err := cmd.Process.Kill(); err != nil {
-				return fmt.Errorf("fail to kill process: %v", err)
-			}
-		}
-
-		<-done
-		return ErrExecTimeout{timeout}
-	case err = <-done:
+	if err := cmd.Wait(); err != nil {
+		return err
 	}
 
-	return err
+	return ctx.Err()
 }
 
 // RunInDirTimeout executes the command in given directory with given timeout,

@@ -117,15 +117,15 @@ func TestTeam_HasRepository(t *testing.T) {
 func TestTeam_AddRepository(t *testing.T) {
 	assert.NoError(t, PrepareTestDatabase())
 
-	testSucess := func(teamID, repoID int64) {
+	testSuccess := func(teamID, repoID int64) {
 		team := AssertExistsAndLoadBean(t, &Team{ID: teamID}).(*Team)
 		repo := AssertExistsAndLoadBean(t, &Repository{ID: repoID}).(*Repository)
 		assert.NoError(t, team.AddRepository(repo))
 		AssertExistsAndLoadBean(t, &TeamRepo{TeamID: teamID, RepoID: repoID})
 		CheckConsistencyFor(t, &Team{ID: teamID}, &Repository{ID: repoID})
 	}
-	testSucess(2, 3)
-	testSucess(2, 5)
+	testSuccess(2, 3)
+	testSuccess(2, 5)
 
 	team := AssertExistsAndLoadBean(t, &Team{ID: 1}).(*Team)
 	repo := AssertExistsAndLoadBean(t, &Repository{ID: 1}).(*Repository)
@@ -250,16 +250,21 @@ func TestDeleteTeam(t *testing.T) {
 
 func TestIsTeamMember(t *testing.T) {
 	assert.NoError(t, PrepareTestDatabase())
+	test := func(orgID, teamID, userID int64, expected bool) {
+		isMember, err := IsTeamMember(orgID, teamID, userID)
+		assert.NoError(t, err)
+		assert.Equal(t, expected, isMember)
+	}
 
-	assert.True(t, IsTeamMember(3, 1, 2))
-	assert.False(t, IsTeamMember(3, 1, 4))
-	assert.False(t, IsTeamMember(3, 1, NonexistentID))
+	test(3, 1, 2, true)
+	test(3, 1, 4, false)
+	test(3, 1, NonexistentID, false)
 
-	assert.True(t, IsTeamMember(3, 2, 2))
-	assert.True(t, IsTeamMember(3, 2, 4))
+	test(3, 2, 2, true)
+	test(3, 2, 4, true)
 
-	assert.False(t, IsTeamMember(3, NonexistentID, NonexistentID))
-	assert.False(t, IsTeamMember(NonexistentID, NonexistentID, NonexistentID))
+	test(3, NonexistentID, NonexistentID, false)
+	test(NonexistentID, NonexistentID, NonexistentID, false)
 }
 
 func TestGetTeamMembers(t *testing.T) {
@@ -280,8 +285,22 @@ func TestGetTeamMembers(t *testing.T) {
 
 func TestGetUserTeams(t *testing.T) {
 	assert.NoError(t, PrepareTestDatabase())
+	test := func(userID int64) {
+		teams, err := GetUserTeams(userID)
+		assert.NoError(t, err)
+		for _, team := range teams {
+			AssertExistsAndLoadBean(t, &TeamUser{TeamID: team.ID, UID: userID})
+		}
+	}
+	test(2)
+	test(5)
+	test(NonexistentID)
+}
+
+func TestGetUserOrgTeams(t *testing.T) {
+	assert.NoError(t, PrepareTestDatabase())
 	test := func(orgID, userID int64) {
-		teams, err := GetUserTeams(orgID, userID)
+		teams, err := GetUserOrgTeams(orgID, userID)
 		assert.NoError(t, err)
 		for _, team := range teams {
 			assert.EqualValues(t, orgID, team.OrgID)
@@ -340,4 +359,18 @@ func TestHasTeamRepo(t *testing.T) {
 
 	test(2, 3, true)
 	test(2, 5, false)
+}
+
+func TestUsersInTeamsCount(t *testing.T) {
+	assert.NoError(t, PrepareTestDatabase())
+
+	test := func(teamIDs []int64, userIDs []int64, expected int64) {
+		count, err := UsersInTeamsCount(teamIDs, userIDs)
+		assert.NoError(t, err)
+		assert.Equal(t, expected, count)
+	}
+
+	test([]int64{2}, []int64{1, 2, 3, 4}, 2)
+	test([]int64{1, 2, 3, 4, 5}, []int64{2, 5}, 2)
+	test([]int64{1, 2, 3, 4, 5}, []int64{2, 3, 5}, 3)
 }

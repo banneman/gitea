@@ -22,12 +22,42 @@ import (
 	"code.gitea.io/gitea/modules/context"
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/modules/util"
 )
 
 // HTTP implmentation git smart HTTP protocol
 func HTTP(ctx *context.Context) {
+	if len(setting.Repository.AccessControlAllowOrigin) > 0 {
+		allowedOrigin := setting.Repository.AccessControlAllowOrigin
+		// Set CORS headers for browser-based git clients
+		ctx.Resp.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		ctx.Resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, User-Agent")
+
+		// Handle preflight OPTIONS request
+		if ctx.Req.Method == "OPTIONS" {
+			if allowedOrigin == "*" {
+				ctx.Status(http.StatusOK)
+			} else if allowedOrigin == "null" {
+				ctx.Status(http.StatusForbidden)
+			} else {
+				origin := ctx.Req.Header.Get("Origin")
+				if len(origin) > 0 && origin == allowedOrigin {
+					ctx.Status(http.StatusOK)
+				} else {
+					ctx.Status(http.StatusForbidden)
+				}
+			}
+			return
+		}
+	}
+
 	username := ctx.Params(":username")
 	reponame := strings.TrimSuffix(ctx.Params(":reponame"), ".git")
+
+	if ctx.Query("go-get") == "1" {
+		context.EarlyResponseForGoGetMeta(ctx)
+		return
+	}
 
 	var isPull bool
 	service := ctx.Query("service")
@@ -52,28 +82,22 @@ func HTTP(ctx *context.Context) {
 	}
 
 	isWiki := false
+	var unitType = models.UnitTypeCode
 	if strings.HasSuffix(reponame, ".wiki") {
 		isWiki = true
+		unitType = models.UnitTypeWiki
 		reponame = reponame[:len(reponame)-5]
 	}
 
-	repoUser, err := models.GetUserByName(username)
+	repo, err := models.GetRepositoryByOwnerAndName(username, reponame)
 	if err != nil {
-		if models.IsErrUserNotExist(err) {
-			ctx.Handle(http.StatusNotFound, "GetUserByName", nil)
-		} else {
-			ctx.Handle(http.StatusInternalServerError, "GetUserByName", err)
-		}
+		ctx.NotFoundOrServerError("GetRepositoryByOwnerAndName", models.IsErrRepoNotExist, err)
 		return
 	}
 
-	repo, err := models.GetRepositoryByName(repoUser.ID, reponame)
-	if err != nil {
-		if models.IsErrRepoNotExist(err) {
-			ctx.Handle(http.StatusNotFound, "GetRepositoryByName", nil)
-		} else {
-			ctx.Handle(http.StatusInternalServerError, "GetRepositoryByName", err)
-		}
+	// Don't allow pushing if the repo is archived
+	if repo.IsArchived && !isPull {
+		ctx.HandleText(http.StatusForbidden, "This repo is archived. You can view files and clone it, but cannot push or open issues/pull-requests.")
 		return
 	}
 
@@ -89,12 +113,8 @@ func HTTP(ctx *context.Context) {
 
 	// check access
 	if askAuth {
-		if setting.Service.EnableReverseProxyAuth {
-			authUsername = ctx.Req.Header.Get(setting.ReverseProxyAuthUser)
-			if len(authUsername) == 0 {
-				ctx.HandleText(401, "reverse proxy login error. authUsername empty")
-				return
-			}
+		authUsername = ctx.Req.Header.Get(setting.ReverseProxyAuthUser)
+		if setting.Service.EnableReverseProxyAuth && len(authUsername) > 0 {
 			authUser, err = models.GetUserByName(authUsername)
 			if err != nil {
 				ctx.HandleText(401, "reverse proxy login error, got error while running GetUserByName")
@@ -123,70 +143,103 @@ func HTTP(ctx *context.Context) {
 				return
 			}
 
-			authUser, err = models.UserSignIn(authUsername, authPasswd)
-			if err != nil {
-				if !models.IsErrUserNotExist(err) {
-					ctx.Handle(http.StatusInternalServerError, "UserSignIn error: %v", err)
-					return
-				}
-
-				// Assume username now is a token.
-				token, err := models.GetAccessTokenBySHA(authUsername)
-				if err != nil {
-					if models.IsErrAccessTokenNotExist(err) || models.IsErrAccessTokenEmpty(err) {
-						ctx.HandleText(http.StatusUnauthorized, "invalid token")
-					} else {
-						ctx.Handle(http.StatusInternalServerError, "GetAccessTokenBySha", err)
+			// Check if username or password is a token
+			isUsernameToken := len(authPasswd) == 0 || authPasswd == "x-oauth-basic"
+			// Assume username is token
+			authToken := authUsername
+			if !isUsernameToken {
+				// Assume password is token
+				authToken = authPasswd
+			}
+			// Assume password is a token.
+			token, err := models.GetAccessTokenBySHA(authToken)
+			if err == nil {
+				if isUsernameToken {
+					authUser, err = models.GetUserByID(token.UID)
+					if err != nil {
+						ctx.ServerError("GetUserByID", err)
+						return
 					}
-					return
+				} else {
+					authUser, err = models.GetUserByName(authUsername)
+					if err != nil {
+						if models.IsErrUserNotExist(err) {
+							ctx.HandleText(http.StatusUnauthorized, "invalid credentials")
+						} else {
+							ctx.ServerError("GetUserByName", err)
+						}
+						return
+					}
+					if authUser.ID != token.UID {
+						ctx.HandleText(http.StatusUnauthorized, "invalid credentials")
+						return
+					}
 				}
-				token.Updated = time.Now()
+				token.UpdatedUnix = util.TimeStampNow()
 				if err = models.UpdateAccessToken(token); err != nil {
-					ctx.Handle(http.StatusInternalServerError, "UpdateAccessToken", err)
+					ctx.ServerError("UpdateAccessToken", err)
 				}
-				authUser, err = models.GetUserByID(token.UID)
-				if err != nil {
-					ctx.Handle(http.StatusInternalServerError, "GetUserByID", err)
-					return
+			} else {
+				if !models.IsErrAccessTokenNotExist(err) && !models.IsErrAccessTokenEmpty(err) {
+					log.Error(4, "GetAccessTokenBySha: %v", err)
 				}
 			}
 
-			if !isPublicPull {
-				has, err := models.HasAccess(authUser, repo, accessMode)
+			if authUser == nil {
+				// Check username and password
+				authUser, err = models.UserSignIn(authUsername, authPasswd)
 				if err != nil {
-					ctx.Handle(http.StatusInternalServerError, "HasAccess", err)
-					return
-				} else if !has {
-					if accessMode == models.AccessModeRead {
-						has, err = models.HasAccess(authUser, repo, models.AccessModeWrite)
-						if err != nil {
-							ctx.Handle(http.StatusInternalServerError, "HasAccess2", err)
-							return
-						} else if !has {
-							ctx.HandleText(http.StatusForbidden, "User permission denied")
-							return
-						}
-					} else {
-						ctx.HandleText(http.StatusForbidden, "User permission denied")
+					if !models.IsErrUserNotExist(err) {
+						ctx.ServerError("UserSignIn error: %v", err)
 						return
 					}
 				}
 
-				if !isPull && repo.IsMirror {
-					ctx.HandleText(http.StatusForbidden, "mirror repository is read-only")
+				if authUser == nil {
+					ctx.HandleText(http.StatusUnauthorized, "invalid credentials")
+					return
+				}
+
+				_, err = models.GetTwoFactorByUID(authUser.ID)
+				if err == nil {
+					// TODO: This response should be changed to "invalid credentials" for security reasons once the expectation behind it (creating an app token to authenticate) is properly documented
+					ctx.HandleText(http.StatusUnauthorized, "Users with two-factor authentication enabled cannot perform HTTP/HTTPS operations via plain username and password. Please create and use a personal access token on the user settings page")
+					return
+				} else if !models.IsErrTwoFactorNotEnrolled(err) {
+					ctx.ServerError("IsErrTwoFactorNotEnrolled", err)
 					return
 				}
 			}
+		}
+
+		perm, err := models.GetUserRepoPermission(repo, authUser)
+		if err != nil {
+			ctx.ServerError("GetUserRepoPermission", err)
+			return
+		}
+
+		if !perm.CanAccess(accessMode, unitType) {
+			ctx.HandleText(http.StatusForbidden, "User permission denied")
+			return
+		}
+
+		if !isPull && repo.IsMirror {
+			ctx.HandleText(http.StatusForbidden, "mirror repository is read-only")
+			return
 		}
 
 		environ = []string{
 			models.EnvRepoUsername + "=" + username,
 			models.EnvRepoName + "=" + reponame,
-			models.EnvRepoUserSalt + "=" + repoUser.Salt,
 			models.EnvPusherName + "=" + authUser.Name,
 			models.EnvPusherID + fmt.Sprintf("=%d", authUser.ID),
 			models.ProtectedBranchRepoID + fmt.Sprintf("=%d", repo.ID),
 		}
+
+		if !authUser.KeepEmailPrivate {
+			environ = append(environ, models.EnvPusherEmail+"="+authUser.Email)
+		}
+
 		if isWiki {
 			environ = append(environ, models.EnvRepoIsWiki+"=true")
 		} else {
@@ -349,7 +402,6 @@ func serviceRPC(h serviceHandler, service string) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		log.GitLogger.Error(2, "fail to serve RPC(%s): %v - %v", service, err, stderr)
-		h.w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 }
@@ -463,7 +515,7 @@ func HTTPBackend(ctx *context.Context, cfg *serviceConfig) http.HandlerFunc {
 				dir, err := getGitRepoPath(m[1])
 				if err != nil {
 					log.GitLogger.Error(4, err.Error())
-					ctx.Handle(http.StatusNotFound, "HTTPBackend", err)
+					ctx.NotFound("HTTPBackend", err)
 					return
 				}
 
@@ -472,7 +524,7 @@ func HTTPBackend(ctx *context.Context, cfg *serviceConfig) http.HandlerFunc {
 			}
 		}
 
-		ctx.Handle(http.StatusNotFound, "HTTPBackend", nil)
+		ctx.NotFound("HTTPBackend", nil)
 		return
 	}
 }

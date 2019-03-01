@@ -1,23 +1,42 @@
-FROM alpine:3.4
-MAINTAINER Thomas Boerger <thomas@webhippie.de>
+
+###################################
+#Build stage
+FROM golang:1.11-alpine3.9 AS build-env
+
+ARG GITEA_VERSION
+ARG TAGS="sqlite sqlite_unlock_notify"
+ENV TAGS "bindata $TAGS"
+
+#Build deps
+RUN apk --no-cache add build-base git
+
+#Setup repo
+COPY . ${GOPATH}/src/code.gitea.io/gitea
+WORKDIR ${GOPATH}/src/code.gitea.io/gitea
+
+#Checkout version if set
+RUN if [ -n "${GITEA_VERSION}" ]; then git checkout "${GITEA_VERSION}"; fi \
+ && make clean generate build
+
+FROM alpine:3.9
+LABEL maintainer="maintainers@gitea.io"
 
 EXPOSE 22 3000
 
-RUN apk update && \
-  apk add \
-    su-exec \
-    ca-certificates \
-    sqlite \
+RUN apk --no-cache add \
     bash \
+    ca-certificates \
+    curl \
+    gettext \
     git \
     linux-pam \
-    s6 \
-    curl \
     openssh \
-    tzdata && \
-  rm -rf \
-    /var/cache/apk/* && \
-  addgroup \
+    s6 \
+    sqlite \
+    su-exec \
+    tzdata
+
+RUN addgroup \
     -S -g 1000 \
     git && \
   adduser \
@@ -27,11 +46,10 @@ RUN apk update && \
     -u 1000 \
     -G git \
     git && \
-  echo "git:$(date +%s | sha256sum | base64 | head -c 32)" | chpasswd
+  echo "git:$(dd if=/dev/urandom bs=24 count=1 status=none | base64)" | chpasswd
 
 ENV USER git
 ENV GITEA_CUSTOM /data/gitea
-ENV GODEBUG=netdns=go
 
 VOLUME ["/data"]
 
@@ -39,4 +57,5 @@ ENTRYPOINT ["/usr/bin/entrypoint"]
 CMD ["/bin/s6-svscan", "/etc/s6"]
 
 COPY docker /
-COPY gitea /app/gitea/gitea
+COPY --from=build-env /go/src/code.gitea.io/gitea/gitea /app/gitea/gitea
+RUN ln -s /app/gitea/gitea /usr/local/bin/gitea

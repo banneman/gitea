@@ -7,20 +7,18 @@ package cmd
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
 	"code.gitea.io/git"
 	"code.gitea.io/gitea/models"
-	"code.gitea.io/gitea/modules/base"
-	"code.gitea.io/gitea/modules/httplib"
 	"code.gitea.io/gitea/modules/log"
+	"code.gitea.io/gitea/modules/private"
 	"code.gitea.io/gitea/modules/setting"
 
-	"github.com/Unknwon/com"
 	"github.com/urfave/cli"
 )
 
@@ -39,7 +37,7 @@ var (
 		},
 		Subcommands: []cli.Command{
 			subcmdHookPreReceive,
-			subcmdHookUpadte,
+			subcmdHookUpdate,
 			subcmdHookPostReceive,
 		},
 	}
@@ -50,7 +48,7 @@ var (
 		Description: "This command should only be called by Git",
 		Action:      runHookPreReceive,
 	}
-	subcmdHookUpadte = cli.Command{
+	subcmdHookUpdate = cli.Command{
 		Name:        "update",
 		Usage:       "Delegate update Git hook",
 		Description: "This command should only be called by Git",
@@ -75,16 +73,15 @@ func runHookPreReceive(c *cli.Context) error {
 		setting.CustomConf = c.GlobalString("config")
 	}
 
-	if err := setup("hooks/pre-receive.log"); err != nil {
-		fail("Hook pre-receive init failed", fmt.Sprintf("setup: %v", err))
-	}
+	setup("hooks/pre-receive.log")
 
 	// the environment setted on serv command
 	repoID, _ := strconv.ParseInt(os.Getenv(models.ProtectedBranchRepoID), 10, 64)
 	isWiki := (os.Getenv(models.EnvRepoIsWiki) == "true")
-	//username := os.Getenv(models.EnvRepoUsername)
-	//reponame := os.Getenv(models.EnvRepoName)
-	//repoPath := models.RepoPath(username, reponame)
+	username := os.Getenv(models.EnvRepoUsername)
+	reponame := os.Getenv(models.EnvRepoName)
+	userIDStr := os.Getenv(models.EnvPusherID)
+	repoPath := models.RepoPath(username, reponame)
 
 	buf := bytes.NewBuffer(nil)
 	scanner := bufio.NewScanner(os.Stdin)
@@ -102,35 +99,38 @@ func runHookPreReceive(c *cli.Context) error {
 			continue
 		}
 
-		//oldCommitID := string(fields[0])
+		oldCommitID := string(fields[0])
 		newCommitID := string(fields[1])
 		refFullName := string(fields[2])
 
-		// FIXME: when we add feature to protected branch to deny force push, then uncomment below
-		/*var isForce bool
-		// detect force push
-		if git.EmptySHA != oldCommitID {
-			output, err := git.NewCommand("rev-list", oldCommitID, "^"+newCommitID).RunInDir(repoPath)
-			if err != nil {
-				fail("Internal error", "Fail to detect force push: %v", err)
-			} else if len(output) > 0 {
-				isForce = true
-			}
-		}*/
-
 		branchName := strings.TrimPrefix(refFullName, git.BranchPrefix)
-		protectBranch, err := models.GetProtectedBranchBy(repoID, branchName)
+		protectBranch, err := private.GetProtectedBranchBy(repoID, branchName)
 		if err != nil {
-			log.GitLogger.Fatal(2, "retrieve protected branches information failed")
+			fail("Internal error", fmt.Sprintf("retrieve protected branches information failed: %v", err))
 		}
 
-		if protectBranch != nil {
+		if protectBranch != nil && protectBranch.IsProtected() {
 			// check and deletion
 			if newCommitID == git.EmptySHA {
 				fail(fmt.Sprintf("branch %s is protected from deletion", branchName), "")
-			} else {
+			}
+
+			// detect force push
+			if git.EmptySHA != oldCommitID {
+				output, err := git.NewCommand("rev-list", "--max-count=1", oldCommitID, "^"+newCommitID).RunInDir(repoPath)
+				if err != nil {
+					fail("Internal error", "Fail to detect force push: %v", err)
+				} else if len(output) > 0 {
+					fail(fmt.Sprintf("branch %s is protected from force push", branchName), "")
+				}
+			}
+
+			userID, _ := strconv.ParseInt(userIDStr, 10, 64)
+			canPush, err := private.CanUserPush(protectBranch.ID, userID)
+			if err != nil {
+				fail("Internal error", "Fail to detect user can push: %v", err)
+			} else if !canPush {
 				fail(fmt.Sprintf("protected branch %s can not be pushed to", branchName), "")
-				//fail(fmt.Sprintf("branch %s is protected from force push", branchName), "")
 			}
 		}
 	}
@@ -149,9 +149,7 @@ func runHookUpdate(c *cli.Context) error {
 		setting.CustomConf = c.GlobalString("config")
 	}
 
-	if err := setup("hooks/update.log"); err != nil {
-		fail("Hook update init failed", fmt.Sprintf("setup: %v", err))
-	}
+	setup("hooks/update.log")
 
 	return nil
 }
@@ -167,13 +165,11 @@ func runHookPostReceive(c *cli.Context) error {
 		setting.CustomConf = c.GlobalString("config")
 	}
 
-	if err := setup("hooks/post-receive.log"); err != nil {
-		fail("Hook post-receive init failed", fmt.Sprintf("setup: %v", err))
-	}
+	setup("hooks/post-receive.log")
 
 	// the environment setted on serv command
+	repoID, _ := strconv.ParseInt(os.Getenv(models.ProtectedBranchRepoID), 10, 64)
 	repoUser := os.Getenv(models.EnvRepoUsername)
-	repoUserSalt := os.Getenv(models.EnvRepoUserSalt)
 	isWiki := (os.Getenv(models.EnvRepoIsWiki) == "true")
 	repoName := os.Getenv(models.EnvRepoName)
 	pusherID, _ := strconv.ParseInt(os.Getenv(models.EnvPusherID), 10, 64)
@@ -199,7 +195,7 @@ func runHookPostReceive(c *cli.Context) error {
 		newCommitID := string(fields[1])
 		refFullName := string(fields[2])
 
-		if err := models.PushUpdate(models.PushUpdateOptions{
+		if err := private.PushUpdate(models.PushUpdateOptions{
 			RefFullName:  refFullName,
 			OldCommitID:  oldCommitID,
 			NewCommitID:  newCommitID,
@@ -211,22 +207,46 @@ func runHookPostReceive(c *cli.Context) error {
 			log.GitLogger.Error(2, "Update: %v", err)
 		}
 
-		// Ask for running deliver hook and test pull request tasks.
-		reqURL := setting.LocalURL + repoUser + "/" + repoName + "/tasks/trigger?branch=" +
-			strings.TrimPrefix(refFullName, git.BranchPrefix) + "&secret=" + base.EncodeMD5(repoUserSalt) + "&pusher=" + com.ToStr(pusherID)
-		log.GitLogger.Trace("Trigger task: %s", reqURL)
-
-		resp, err := httplib.Head(reqURL).SetTLSClientConfig(&tls.Config{
-			InsecureSkipVerify: true,
-		}).Response()
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode/100 != 2 {
-				log.GitLogger.Error(2, "Failed to trigger task: not 2xx response code")
+		if newCommitID != git.EmptySHA && strings.HasPrefix(refFullName, git.BranchPrefix) {
+			branch := strings.TrimPrefix(refFullName, git.BranchPrefix)
+			repo, pullRequestAllowed, err := private.GetRepository(repoID)
+			if err != nil {
+				log.GitLogger.Error(2, "get repo: %v", err)
+				break
 			}
-		} else {
-			log.GitLogger.Error(2, "Failed to trigger task: %v", err)
+			if !pullRequestAllowed {
+				break
+			}
+
+			baseRepo := repo
+			if repo.IsFork {
+				baseRepo = repo.BaseRepo
+			}
+
+			if !repo.IsFork && branch == baseRepo.DefaultBranch {
+				break
+			}
+
+			pr, err := private.ActivePullRequest(baseRepo.ID, repo.ID, baseRepo.DefaultBranch, branch)
+			if err != nil {
+				log.GitLogger.Error(2, "get active pr: %v", err)
+				break
+			}
+
+			fmt.Fprintln(os.Stderr, "")
+			if pr == nil {
+				if repo.IsFork {
+					branch = fmt.Sprintf("%s:%s", repo.OwnerName, branch)
+				}
+				fmt.Fprintf(os.Stderr, "Create a new pull request for '%s':\n", branch)
+				fmt.Fprintf(os.Stderr, "  %s/compare/%s...%s\n", baseRepo.HTMLURL(), url.QueryEscape(baseRepo.DefaultBranch), url.QueryEscape(branch))
+			} else {
+				fmt.Fprint(os.Stderr, "Visit the existing pull request:\n")
+				fmt.Fprintf(os.Stderr, "  %s/pulls/%d\n", baseRepo.HTMLURL(), pr.Index)
+			}
+			fmt.Fprintln(os.Stderr, "")
 		}
+
 	}
 
 	return nil

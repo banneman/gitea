@@ -12,7 +12,10 @@
 					<div class="inline required field {{if .Err_CloneAddr}}error{{end}}">
 						<label for="clone_addr">{{.i18n.Tr "repo.migrate.clone_address"}}</label>
 						<input id="clone_addr" name="clone_addr" value="{{.clone_addr}}" autofocus required>
-						<span class="help">{{.i18n.Tr "repo.migrate.clone_address_desc"}}{{if .ContextUser.CanImportLocal}} {{.i18n.Tr "repo.migrate.clone_local_path"}}{{end}}</span>
+						<span class="help">
+						{{.i18n.Tr "repo.migrate.clone_address_desc"}}{{if .ContextUser.CanImportLocal}} {{.i18n.Tr "repo.migrate.clone_local_path"}}{{end}}
+						{{if .LFSActive}}<br/>{{.i18n.Tr "repo.migrate.lfs_mirror_unsupported"}}{{end}}
+						</span>
 					</div>
 					<div class="ui accordion optional field">
 						<div class="title {{if .Err_Auth}}text red active{{end}}">
@@ -67,10 +70,10 @@
 						<div class="ui checkbox">
 							{{if .IsForcedPrivate}}
 								<input name="private" type="checkbox" checked readonly>
-								<label>{{.i18n.Tr "repo.visiblity_helper_forced" | Safe}}</label>
+								<label>{{.i18n.Tr "repo.visibility_helper_forced" | Safe}}</label>
 							{{else}}
 								<input name="private" type="checkbox" {{if .private}}checked{{end}}>
-								<label>{{.i18n.Tr "repo.visiblity_helper" | Safe}}</label>
+								<label>{{.i18n.Tr "repo.visibility_helper" | Safe}}</label>
 							{{end}}
 						</div>
 					</div>

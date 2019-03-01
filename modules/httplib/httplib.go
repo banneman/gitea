@@ -25,7 +25,7 @@ import (
 	"time"
 )
 
-var defaultSetting = Settings{false, "GogsServer", 60 * time.Second, 60 * time.Second, nil, nil, nil, false}
+var defaultSetting = Settings{false, "GiteaServer", 60 * time.Second, 60 * time.Second, nil, nil, nil, false}
 var defaultCookieJar http.CookieJar
 var settingMutex sync.Mutex
 
@@ -60,6 +60,11 @@ func newRequest(url, method string) *Request {
 		ProtoMinor: 1,
 	}
 	return &Request{url, &req, map[string]string{}, map[string]string{}, defaultSetting, &resp, nil}
+}
+
+// NewRequest returns *Request with specific method
+func NewRequest(url, method string) *Request {
+	return newRequest(url, method)
 }
 
 // Get returns *Request with GET method.
@@ -156,6 +161,12 @@ func (r *Request) SetTLSClientConfig(config *tls.Config) *Request {
 // Header add header item string in request.
 func (r *Request) Header(key, value string) *Request {
 	r.req.Header.Set(key, value)
+	return r
+}
+
+// HeaderWithSensitiveCase add header item in request and keep the case of the header key.
+func (r *Request) HeaderWithSensitiveCase(key, value string) *Request {
+	r.req.Header[key] = []string{value}
 	return r
 }
 
@@ -438,7 +449,7 @@ func (r *Request) ToXML(v interface{}) error {
 	return err
 }
 
-// Response executes request client gets response mannually.
+// Response executes request client gets response manually.
 func (r *Request) Response() (*http.Response, error) {
 	return r.getResponse()
 }

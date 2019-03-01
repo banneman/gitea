@@ -18,7 +18,7 @@
 						</div>
 						<div class="field {{if .Err_FullName}}error{{end}}">
 							<label for="full_name">{{.i18n.Tr "org.org_full_name_holder"}}</label>
-							<input id="full_name" name="full_name" value="{{.Org.FullName | Str2html}}">
+							<input id="full_name" name="full_name" value="{{.Org.FullName}}">
 						</div>
 						<div class="field {{if .Err_Description}}error{{end}}">
 							<label for="description">{{$.i18n.Tr "org.org_desc"}}</label>
@@ -31,6 +31,29 @@
 						<div class="field">
 							<label for="location">{{.i18n.Tr "org.settings.location"}}</label>
 							<input id="location" name="location"  value="{{.Org.Location}}">
+						</div>
+
+						<div class="ui divider"></div>
+						<div class="field" id="visibility_box">
+							<label for="visibility">{{.i18n.Tr "org.settings.visibility"}}</label>
+							<div class="field">
+								<div class="ui radio checkbox">
+									<input class="hidden enable-system-radio" tabindex="0" name="visibility" type="radio" value="0" {{if eq .CurrentVisibility 0}}checked{{end}}/>
+									<label>{{.i18n.Tr "org.settings.visibility.public"}}</label>
+								</div>
+							</div>
+							<div class="field">
+								<div class="ui radio checkbox">
+									<input class="hidden enable-system-radio" tabindex="0" name="visibility" type="radio" value="1" {{if eq .CurrentVisibility 1}}checked{{end}}/>
+									<label>{{.i18n.Tr "org.settings.visibility.limited"}}</label>
+								</div>
+							</div>
+							<div class="field">
+								<div class="ui radio checkbox">
+									<input class="hidden enable-system-radio" tabindex="0" name="visibility" type="radio" value="2" {{if eq .CurrentVisibility 2}}checked{{end}}/>
+									<label>{{.i18n.Tr "org.settings.visibility.private"}}</label>
+								</div>
+							</div>
 						</div>
 
 						{{if .SignedUser.IsAdmin}}

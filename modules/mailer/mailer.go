@@ -1,10 +1,12 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
+// Copyright 2017 The Gitea Authors. All rights reserved.
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
 package mailer
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -15,11 +17,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jaytaylor/html2text"
-	"gopkg.in/gomail.v2"
-
+	"code.gitea.io/gitea/modules/base"
 	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/setting"
+
+	"github.com/jaytaylor/html2text"
+	"gopkg.in/gomail.v2"
 )
 
 // Message mail body and log info
@@ -29,24 +32,24 @@ type Message struct {
 }
 
 // NewMessageFrom creates new mail message object with custom From header.
-func NewMessageFrom(to []string, from, subject, htmlBody string) *Message {
-	log.Trace("NewMessageFrom (htmlBody):\n%s", htmlBody)
+func NewMessageFrom(to []string, fromDisplayName, fromAddress, subject, body string) *Message {
+	log.Trace("NewMessageFrom (body):\n%s", body)
 
 	msg := gomail.NewMessage()
-	msg.SetHeader("From", from)
+	msg.SetAddressHeader("From", fromAddress, fromDisplayName)
 	msg.SetHeader("To", to...)
 	msg.SetHeader("Subject", subject)
 	msg.SetDateHeader("Date", time.Now())
 
-	body, err := html2text.FromString(htmlBody)
-	if err != nil {
-		log.Error(4, "html2text.FromString: %v", err)
-		msg.SetBody("text/html", htmlBody)
-	} else {
-		msg.SetBody("text/plain", body)
-		if setting.MailService.EnableHTMLAlternative {
-			msg.AddAlternative("text/html", htmlBody)
+	plainBody, err := html2text.FromString(body)
+	if err != nil || setting.MailService.SendAsPlainText {
+		if strings.Contains(base.TruncateString(body, 100), "<html>") {
+			log.Warn("Mail contains HTML but configured to send as plain text.")
 		}
+		msg.SetBody("text/plain", plainBody)
+	} else {
+		msg.SetBody("text/plain", plainBody)
+		msg.AddAlternative("text/html", body)
 	}
 
 	return &Message{
@@ -56,7 +59,7 @@ func NewMessageFrom(to []string, from, subject, htmlBody string) *Message {
 
 // NewMessage creates new mail message object with default From header.
 func NewMessage(to []string, subject, body string) *Message {
-	return NewMessageFrom(to, setting.MailService.From, subject, body)
+	return NewMessageFrom(to, setting.MailService.FromName, setting.MailService.FromEmail, subject, body)
 }
 
 type loginAuth struct {
@@ -82,7 +85,7 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 		case "Password:":
 			return []byte(a.password), nil
 		default:
-			return nil, fmt.Errorf("unknwon fromServer: %s", string(fromServer))
+			return nil, fmt.Errorf("unknown fromServer: %s", string(fromServer))
 		}
 	}
 	return nil, nil
@@ -120,11 +123,10 @@ func (s *smtpSender) Send(from string, to []string, msg io.WriterTo) error {
 	}
 	defer conn.Close()
 
-	isSecureConn := false
+	isSecureConn := opts.IsTLSEnabled || (strings.HasSuffix(port, "465"))
 	// Start TLS directly if the port ends with 465 (SMTPS protocol)
-	if strings.HasSuffix(port, "465") {
+	if isSecureConn {
 		conn = tls.Client(conn, tlsconfig)
-		isSecureConn = true
 	}
 
 	client, err := smtp.NewClient(conn, host)
@@ -146,7 +148,7 @@ func (s *smtpSender) Send(from string, to []string, msg io.WriterTo) error {
 		}
 	}
 
-	// If not using SMTPS, alway use STARTTLS if available
+	// If not using SMTPS, always use STARTTLS if available
 	hasStartTLS, _ := client.Extension("STARTTLS")
 	if !isSecureConn && hasStartTLS {
 		if err = client.StartTLS(tlsconfig); err != nil {
@@ -207,6 +209,7 @@ func (s *sendmailSender) Send(from string, to []string, msg io.WriterTo) error {
 	var waitError error
 
 	args := []string{"-F", from, "-i"}
+	args = append(args, setting.MailService.SendmailArgs...)
 	args = append(args, to...)
 	log.Trace("Sending with: %s %v", setting.MailService.SendmailPath, args)
 	cmd := exec.Command(setting.MailService.SendmailPath, args...)
@@ -233,6 +236,20 @@ func (s *sendmailSender) Send(from string, to []string, msg io.WriterTo) error {
 	} else {
 		return waitError
 	}
+}
+
+// Sender sendmail mail sender
+type dummySender struct {
+}
+
+// Send send email
+func (s *dummySender) Send(from string, to []string, msg io.WriterTo) error {
+	buf := bytes.Buffer{}
+	if _, err := msg.WriteTo(&buf); err != nil {
+		return err
+	}
+	log.Info("Mail From: %s To: %v Body: %s", from, to, buf.String())
+	return nil
 }
 
 func processMailQueue() {
@@ -263,10 +280,13 @@ func NewContext() {
 		return
 	}
 
-	if setting.MailService.UseSendmail {
-		Sender = &sendmailSender{}
-	} else {
+	switch setting.MailService.MailerType {
+	case "smtp":
 		Sender = &smtpSender{}
+	case "sendmail":
+		Sender = &sendmailSender{}
+	case "dummy":
+		Sender = &dummySender{}
 	}
 
 	mailQueue = make(chan *Message, setting.MailService.QueueLength)

@@ -42,7 +42,7 @@ func generateAndMigrateGitHooks(x *xorm.Engine) (err error) {
 		}
 	)
 
-	return x.Where("id > 0").Iterate(new(Repository),
+	return x.Where("id > 0").BufferSize(setting.IterateBufferSize).Iterate(new(Repository),
 		func(idx int, bean interface{}) error {
 			repo := bean.(*Repository)
 			user := new(User)
@@ -60,8 +60,14 @@ func generateAndMigrateGitHooks(x *xorm.Engine) (err error) {
 				oldHookPath := filepath.Join(hookDir, hookName)
 				newHookPath := filepath.Join(hookDir, hookName+".d", "gitea")
 
-				if err = os.MkdirAll(filepath.Join(hookDir, hookName+".d"), os.ModePerm); err != nil {
-					return fmt.Errorf("create hooks dir '%s': %v", filepath.Join(hookDir, hookName+".d"), err)
+				customHooksDir := filepath.Join(hookDir, hookName+".d")
+				// if it's exist, that means you have upgraded ever
+				if com.IsExist(customHooksDir) {
+					continue
+				}
+
+				if err = os.MkdirAll(customHooksDir, os.ModePerm); err != nil {
+					return fmt.Errorf("create hooks dir '%s': %v", customHooksDir, err)
 				}
 
 				// WARNING: Old server-side hooks will be moved to sub directory with the same name

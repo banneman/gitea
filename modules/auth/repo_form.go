@@ -1,4 +1,5 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
+// Copyright 2017 The Gitea Authors. All rights reserved.
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
@@ -9,6 +10,9 @@ import (
 	"strings"
 
 	"code.gitea.io/gitea/models"
+	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/routers/utils"
+
 	"github.com/Unknwon/com"
 	"github.com/go-macaron/binding"
 	macaron "gopkg.in/macaron.v1"
@@ -33,24 +37,27 @@ type CreateRepoForm struct {
 	Readme      string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *CreateRepoForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
 
 // MigrateRepoForm form for migrating repository
 type MigrateRepoForm struct {
+	// required: true
 	CloneAddr    string `json:"clone_addr" binding:"Required"`
 	AuthUsername string `json:"auth_username"`
 	AuthPassword string `json:"auth_password"`
-	UID          int64  `json:"uid" binding:"Required"`
-	RepoName     string `json:"repo_name" binding:"Required;AlphaDashDot;MaxSize(100)"`
-	Mirror       bool   `json:"mirror"`
-	Private      bool   `json:"private"`
-	Description  string `json:"description" binding:"MaxSize(255)"`
+	// required: true
+	UID int64 `json:"uid" binding:"Required"`
+	// required: true
+	RepoName    string `json:"repo_name" binding:"Required;AlphaDashDot;MaxSize(100)"`
+	Mirror      bool   `json:"mirror"`
+	Private     bool   `json:"private"`
+	Description string `json:"description" binding:"MaxSize(255)"`
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *MigrateRepoForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -87,26 +94,65 @@ func (f MigrateRepoForm) ParseRemoteAddr(user *models.User) (string, error) {
 type RepoSettingForm struct {
 	RepoName      string `binding:"Required;AlphaDashDot;MaxSize(100)"`
 	Description   string `binding:"MaxSize(255)"`
-	Website       string `binding:"Url;MaxSize(255)"`
-	Interval      int
+	Website       string `binding:"ValidUrl;MaxSize(255)"`
+	Interval      string
 	MirrorAddress string
 	Private       bool
 	EnablePrune   bool
 
 	// Advanced settings
-	EnableWiki            bool
-	EnableExternalWiki    bool
-	ExternalWikiURL       string
-	EnableIssues          bool
-	EnableExternalTracker bool
-	ExternalTrackerURL    string
-	TrackerURLFormat      string
-	TrackerIssueStyle     string
-	EnablePulls           bool
+	EnableWiki                       bool
+	EnableExternalWiki               bool
+	ExternalWikiURL                  string
+	EnableIssues                     bool
+	EnableExternalTracker            bool
+	ExternalTrackerURL               string
+	TrackerURLFormat                 string
+	TrackerIssueStyle                string
+	EnablePulls                      bool
+	PullsIgnoreWhitespace            bool
+	PullsAllowMerge                  bool
+	PullsAllowRebase                 bool
+	PullsAllowRebaseMerge            bool
+	PullsAllowSquash                 bool
+	EnableTimetracker                bool
+	AllowOnlyContributorsToTrackTime bool
+	EnableIssueDependencies          bool
+	IsArchived                       bool
+
+	// Admin settings
+	EnableHealthCheck                     bool
+	EnableCloseIssuesViaCommitInAnyBranch bool
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *RepoSettingForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// __________                             .__
+// \______   \____________    ____   ____ |  |__
+//  |    |  _/\_  __ \__  \  /    \_/ ___\|  |  \
+//  |    |   \ |  | \// __ \|   |  \  \___|   Y  \
+//  |______  / |__|  (____  /___|  /\___  >___|  /
+//         \/             \/     \/     \/     \/
+
+// ProtectBranchForm form for changing protected branch settings
+type ProtectBranchForm struct {
+	Protected               bool
+	EnableWhitelist         bool
+	WhitelistUsers          string
+	WhitelistTeams          string
+	EnableMergeWhitelist    bool
+	MergeWhitelistUsers     string
+	MergeWhitelistTeams     string
+	RequiredApprovals       int64
+	ApprovalsWhitelistUsers string
+	ApprovalsWhitelistTeams string
+}
+
+// Validate validates the fields
+func (f *ProtectBranchForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
 
@@ -119,11 +165,17 @@ func (f *RepoSettingForm) Validate(ctx *macaron.Context, errs binding.Errors) bi
 
 // WebhookForm form for changing web hook
 type WebhookForm struct {
-	Events      string
-	Create      bool
-	Push        bool
-	PullRequest bool
-	Active      bool
+	Events       string
+	Create       bool
+	Delete       bool
+	Fork         bool
+	Issues       bool
+	IssueComment bool
+	Release      bool
+	Push         bool
+	PullRequest  bool
+	Repository   bool
+	Active       bool
 }
 
 // PushOnly if the hook will be triggered when push
@@ -143,20 +195,33 @@ func (f WebhookForm) ChooseEvents() bool {
 
 // NewWebhookForm form for creating web hook
 type NewWebhookForm struct {
-	PayloadURL  string `binding:"Required;Url"`
+	PayloadURL  string `binding:"Required;ValidUrl"`
 	ContentType int    `binding:"Required"`
 	Secret      string
 	WebhookForm
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *NewWebhookForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// NewGogshookForm form for creating gogs hook
+type NewGogshookForm struct {
+	PayloadURL  string `binding:"Required;ValidUrl"`
+	ContentType int    `binding:"Required"`
+	Secret      string
+	WebhookForm
+}
+
+// Validate validates the fields
+func (f *NewGogshookForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
 
 // NewSlackHookForm form for creating slack hook
 type NewSlackHookForm struct {
-	PayloadURL string `binding:"Required;Url"`
+	PayloadURL string `binding:"Required;ValidUrl"`
 	Channel    string `binding:"Required"`
 	Username   string
 	IconURL    string
@@ -164,8 +229,37 @@ type NewSlackHookForm struct {
 	WebhookForm
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *NewSlackHookForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// HasInvalidChannel validates the channel name is in the right format
+func (f NewSlackHookForm) HasInvalidChannel() bool {
+	return !utils.IsValidSlackChannel(f.Channel)
+}
+
+// NewDiscordHookForm form for creating discord hook
+type NewDiscordHookForm struct {
+	PayloadURL string `binding:"Required;ValidUrl"`
+	Username   string
+	IconURL    string
+	WebhookForm
+}
+
+// Validate validates the fields
+func (f *NewDiscordHookForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// NewDingtalkHookForm form for creating dingtalk hook
+type NewDingtalkHookForm struct {
+	PayloadURL string `binding:"Required;ValidUrl"`
+	WebhookForm
+}
+
+// Validate validates the fields
+func (f *NewDingtalkHookForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
 
@@ -180,13 +274,15 @@ func (f *NewSlackHookForm) Validate(ctx *macaron.Context, errs binding.Errors) b
 type CreateIssueForm struct {
 	Title       string `binding:"Required;MaxSize(255)"`
 	LabelIDs    string `form:"label_ids"`
+	AssigneeIDs string `form:"assignee_ids"`
+	Ref         string `form:"ref"`
 	MilestoneID int64
 	AssigneeID  int64
 	Content     string
 	Files       []string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *CreateIssueForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -198,9 +294,45 @@ type CreateCommentForm struct {
 	Files   []string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *CreateCommentForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// ReactionForm form for adding and removing reaction
+type ReactionForm struct {
+	Content string `binding:"Required;In(+1,-1,laugh,confused,heart,hooray)"`
+}
+
+// Validate validates the fields
+func (f *ReactionForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// IssueLockForm form for locking an issue
+type IssueLockForm struct {
+	Reason string `binding:"Required"`
+}
+
+// Validate validates the fields
+func (i *IssueLockForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, i, ctx.Locale)
+}
+
+// HasValidReason checks to make sure that the reason submitted in
+// the form matches any of the values in the config
+func (i IssueLockForm) HasValidReason() bool {
+	if strings.TrimSpace(i.Reason) == "" {
+		return true
+	}
+
+	for _, v := range setting.Repository.Issue.LockReasons {
+		if v == i.Reason {
+			return true
+		}
+	}
+
+	return false
 }
 
 //    _____  .__.__                   __
@@ -217,7 +349,7 @@ type CreateMilestoneForm struct {
 	Deadline string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *CreateMilestoneForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -231,12 +363,13 @@ func (f *CreateMilestoneForm) Validate(ctx *macaron.Context, errs binding.Errors
 
 // CreateLabelForm form for creating label
 type CreateLabelForm struct {
-	ID    int64
-	Title string `binding:"Required;MaxSize(50)" locale:"repo.issues.label_name"`
-	Color string `binding:"Required;Size(7)" locale:"repo.issues.label_color"`
+	ID          int64
+	Title       string `binding:"Required;MaxSize(50)" locale:"repo.issues.label_title"`
+	Description string `binding:"MaxSize(200)" locale:"repo.issues.label_description"`
+	Color       string `binding:"Required;Size(7)" locale:"repo.issues.label_color"`
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *CreateLabelForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -246,9 +379,79 @@ type InitializeLabelsForm struct {
 	TemplateName string `binding:"Required"`
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *InitializeLabelsForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// __________      .__  .__    __________                                     __
+// \______   \__ __|  | |  |   \______   \ ____  ________ __   ____   _______/  |_
+//  |     ___/  |  \  | |  |    |       _// __ \/ ____/  |  \_/ __ \ /  ___/\   __\
+//  |    |   |  |  /  |_|  |__  |    |   \  ___< <_|  |  |  /\  ___/ \___ \  |  |
+//  |____|   |____/|____/____/  |____|_  /\___  >__   |____/  \___  >____  > |__|
+//                                     \/     \/   |__|           \/     \/
+
+// MergePullRequestForm form for merging Pull Request
+// swagger:model MergePullRequestOption
+type MergePullRequestForm struct {
+	// required: true
+	// enum: merge,rebase,rebase-merge,squash
+	Do                string `binding:"Required;In(merge,rebase,rebase-merge,squash)"`
+	MergeTitleField   string
+	MergeMessageField string
+}
+
+// Validate validates the fields
+func (f *MergePullRequestForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// CodeCommentForm form for adding code comments for PRs
+type CodeCommentForm struct {
+	Content  string `binding:"Required"`
+	Side     string `binding:"Required;In(previous,proposed)"`
+	Line     int64
+	TreePath string `form:"path" binding:"Required"`
+	IsReview bool   `form:"is_review"`
+	Reply    int64  `form:"reply"`
+}
+
+// Validate validates the fields
+func (f *CodeCommentForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// SubmitReviewForm for submitting a finished code review
+type SubmitReviewForm struct {
+	Content string
+	Type    string `binding:"Required;In(approve,comment,reject)"`
+}
+
+// Validate validates the fields
+func (f *SubmitReviewForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// ReviewType will return the corresponding reviewtype for type
+func (f SubmitReviewForm) ReviewType() models.ReviewType {
+	switch f.Type {
+	case "approve":
+		return models.ReviewTypeApprove
+	case "comment":
+		return models.ReviewTypeComment
+	case "reject":
+		return models.ReviewTypeReject
+	default:
+		return models.ReviewTypeUnknown
+	}
+}
+
+// HasEmptyContent checks if the content of the review form is empty.
+func (f SubmitReviewForm) HasEmptyContent() bool {
+	reviewType := f.ReviewType()
+
+	return (reviewType == models.ReviewTypeComment || reviewType == models.ReviewTypeReject) &&
+		len(strings.TrimSpace(f.Content)) == 0
 }
 
 // __________       .__
@@ -260,7 +463,7 @@ func (f *InitializeLabelsForm) Validate(ctx *macaron.Context, errs binding.Error
 
 // NewReleaseForm form for creating release
 type NewReleaseForm struct {
-	TagName    string `binding:"Required"`
+	TagName    string `binding:"Required;GitRefName"`
 	Target     string `form:"tag_target" binding:"Required"`
 	Title      string `binding:"Required"`
 	Content    string
@@ -269,7 +472,7 @@ type NewReleaseForm struct {
 	Files      []string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *NewReleaseForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -283,7 +486,7 @@ type EditReleaseForm struct {
 	Files      []string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *EditReleaseForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -297,13 +500,12 @@ func (f *EditReleaseForm) Validate(ctx *macaron.Context, errs binding.Errors) bi
 
 // NewWikiForm form for creating wiki
 type NewWikiForm struct {
-	OldTitle string
-	Title    string `binding:"Required"`
-	Content  string `binding:"Required"`
-	Message  string
+	Title   string `binding:"Required"`
+	Content string `binding:"Required"`
+	Message string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 // FIXME: use code generation to generate this method.
 func (f *NewWikiForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
@@ -323,11 +525,11 @@ type EditRepoFileForm struct {
 	CommitSummary string `binding:"MaxSize(100)"`
 	CommitMessage string
 	CommitChoice  string `binding:"Required;MaxSize(50)"`
-	NewBranchName string `binding:"AlphaDashDot;MaxSize(100)"`
+	NewBranchName string `binding:"GitRefName;MaxSize(100)"`
 	LastCommit    string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *EditRepoFileForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -337,7 +539,7 @@ type EditPreviewDiffForm struct {
 	Content string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *EditPreviewDiffForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -356,11 +558,11 @@ type UploadRepoFileForm struct {
 	CommitSummary string `binding:"MaxSize(100)"`
 	CommitMessage string
 	CommitChoice  string `binding:"Required;MaxSize(50)"`
-	NewBranchName string `binding:"AlphaDashDot;MaxSize(100)"`
+	NewBranchName string `binding:"GitRefName;MaxSize(100)"`
 	Files         []string
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *UploadRepoFileForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -370,7 +572,7 @@ type RemoveUploadFileForm struct {
 	File string `binding:"Required;MaxSize(50)"`
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *RemoveUploadFileForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
@@ -387,10 +589,43 @@ type DeleteRepoFileForm struct {
 	CommitSummary string `binding:"MaxSize(100)"`
 	CommitMessage string
 	CommitChoice  string `binding:"Required;MaxSize(50)"`
-	NewBranchName string `binding:"AlphaDashDot;MaxSize(100)"`
+	NewBranchName string `binding:"GitRefName;MaxSize(100)"`
 }
 
-// Validate valideates the fields
+// Validate validates the fields
 func (f *DeleteRepoFileForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// ___________.__                 ___________                     __
+// \__    ___/|__| _____   ____   \__    ___/___________    ____ |  | __ ___________
+// |    |   |  |/     \_/ __ \    |    |  \_  __ \__  \ _/ ___\|  |/ // __ \_  __ \
+// |    |   |  |  Y Y  \  ___/    |    |   |  | \// __ \\  \___|    <\  ___/|  | \/
+// |____|   |__|__|_|  /\___  >   |____|   |__|  (____  /\___  >__|_ \\___  >__|
+// \/     \/                        \/     \/     \/    \/
+
+// AddTimeManuallyForm form that adds spent time manually.
+type AddTimeManuallyForm struct {
+	Hours   int `binding:"Range(0,1000)"`
+	Minutes int `binding:"Range(0,1000)"`
+}
+
+// Validate validates the fields
+func (f *AddTimeManuallyForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
+	return validate(errs, ctx.Data, f, ctx.Locale)
+}
+
+// SaveTopicForm form for save topics for repository
+type SaveTopicForm struct {
+	Topics []string `binding:"topics;Required;"`
+}
+
+// DeadlineForm hold the validation rules for deadlines
+type DeadlineForm struct {
+	DateString string `form:"date" binding:"Required;Size(10)"`
+}
+
+// Validate validates the fields
+func (f *DeadlineForm) Validate(ctx *macaron.Context, errs binding.Errors) binding.Errors {
 	return validate(errs, ctx.Data, f, ctx.Locale)
 }
